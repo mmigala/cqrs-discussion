@@ -45,7 +45,7 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// --- Approach 2: Application Services (no CQRS) ---
+// --- Approach 1: Application Services (no CQRS) ---
 app.MapPost("/services/workspaces", (CreateRequest req, IWorkspaceService svc) =>
 {
     var ws = svc.Create(req.Name);
@@ -56,7 +56,7 @@ app.MapGet("/services/workspaces/{id:guid}", (Guid id, IWorkspaceService svc) =>
     svc.GetById(id) is { } ws ? Results.Ok(ws) : Results.NotFound())
     .WithTags("Application Services");
 
-// --- Approach 1: CQRS via MediatR ---
+// --- Approach 2: CQRS via MediatR (in-process, no queue) ---
 app.MapPost("/cqrs/workspaces", async (CreateRequest req, IMediator mediator) =>
 {
     var ws = await mediator.Send(new CreateWorkspaceCommand(req.Name));
@@ -67,7 +67,7 @@ app.MapGet("/cqrs/workspaces/{id:guid}", async (Guid id, IMediator mediator) =>
     await mediator.Send(new GetWorkspaceQuery(id)) is { } ws ? Results.Ok(ws) : Results.NotFound())
     .WithTags("CQRS (MediatR)");
 
-// --- Approach 4: Async Command Dispatch (RabbitMQ for resilience) ---
+// --- Approach 3: Async Command Dispatch (RabbitMQ for resilience) ---
 app.MapPost("/async/workspaces", async (CreateRequest req, RabbitMqPublisher publisher) =>
 {
     await publisher.PublishCreateCommand(req.Name);
