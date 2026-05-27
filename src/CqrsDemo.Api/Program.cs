@@ -51,6 +51,7 @@ builder.Services.AddSingleton<IConnection>(sp =>
     return factory.CreateConnectionAsync().GetAwaiter().GetResult();
 });
 builder.Services.AddSingleton<RabbitMqPublisher>();
+builder.Services.AddSingleton<OperationStore>();
 builder.Services.AddHostedService<RabbitMqConsumer>();
 
 var app = builder.Build();
@@ -76,6 +77,7 @@ app.MapServiceEndpoints();
 app.MapCqrsEndpoints();
 app.MapCqrsPlainEndpoints();
 app.MapAsyncEndpoints();
+app.MapAsyncProperEndpoints();
 
 app.Run();
 
