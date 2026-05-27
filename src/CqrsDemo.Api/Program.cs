@@ -1,7 +1,10 @@
 using CqrsDemo.Api.Async;
 using CqrsDemo.Api.Cqrs;
+using CqrsDemo.Api.Cqrs.Behaviors;
+using CqrsDemo.Api.CqrsPlain;
 using CqrsDemo.Api.Repository;
 using CqrsDemo.Api.Services;
+using FluentValidation;
 using MediatR;
 using RabbitMQ.Client;
 
@@ -11,7 +14,16 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddSingleton<IWorkspaceRepository, InMemoryWorkspaceRepository>();
 builder.Services.AddScoped<IWorkspaceService, WorkspaceService>();
+
+// MediatR + pipeline behaviors (Phase 6: the real value of MediatR)
 builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<CreateWorkspaceCommand>());
+builder.Services.AddValidatorsFromAssemblyContaining<CreateWorkspaceCommandValidator>();
+builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
+builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
+
+// CQRS without MediatR (Phase 7: proves CQRS ≠ MediatR)
+builder.Services.AddScoped<IWorkspaceCommandService, WorkspaceCommandService>();
+builder.Services.AddScoped<IWorkspaceQueryService, WorkspaceQueryService>();
 
 // RabbitMQ
 var rabbitHost = builder.Configuration.GetValue<string>("RabbitMQ:Host") ?? "localhost";
@@ -45,6 +57,20 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
+// Map FluentValidation exceptions to 400 responses
+app.Use(async (context, next) =>
+{
+    try { await next(); }
+    catch (ValidationException ex)
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsJsonAsync(new
+        {
+            errors = ex.Errors.Select(e => new { e.PropertyName, e.ErrorMessage })
+        });
+    }
+});
+
 // --- Approach 1: Application Services (no CQRS) ---
 app.MapPost("/services/workspaces", (CreateRequest req, IWorkspaceService svc) =>
 {
@@ -57,17 +83,29 @@ app.MapGet("/services/workspaces/{id:guid}", (Guid id, IWorkspaceService svc) =>
     .WithTags("Application Services");
 
 // --- Approach 2: CQRS via MediatR (in-process, no queue) ---
+// Pipeline: ValidationBehavior → LoggingBehavior → Handler
 app.MapPost("/cqrs/workspaces", async (CreateRequest req, IMediator mediator) =>
 {
     var ws = await mediator.Send(new CreateWorkspaceCommand(req.Name));
     return Results.Created($"/cqrs/workspaces/{ws.Id}", ws);
-}).WithTags("CQRS (MediatR)");
+}).WithTags("CQRS (MediatR + Pipeline)");
 
 app.MapGet("/cqrs/workspaces/{id:guid}", async (Guid id, IMediator mediator) =>
     await mediator.Send(new GetWorkspaceQuery(id)) is { } ws ? Results.Ok(ws) : Results.NotFound())
-    .WithTags("CQRS (MediatR)");
+    .WithTags("CQRS (MediatR + Pipeline)");
 
-// --- Approach 3: Async Command Dispatch (RabbitMQ for resilience) ---
+// --- Approach 3: CQRS without MediatR (plain services, same pattern) ---
+app.MapPost("/cqrs-plain/workspaces", (CreateRequest req, IWorkspaceCommandService cmdSvc) =>
+{
+    var ws = cmdSvc.Create(req.Name);
+    return Results.Created($"/cqrs-plain/workspaces/{ws.Id}", ws);
+}).WithTags("CQRS (Plain Services)");
+
+app.MapGet("/cqrs-plain/workspaces/{id:guid}", (Guid id, IWorkspaceQueryService querySvc) =>
+    querySvc.GetById(id) is { } ws ? Results.Ok(ws) : Results.NotFound())
+    .WithTags("CQRS (Plain Services)");
+
+// --- Approach 4: Async Command Dispatch (RabbitMQ for resilience) ---
 app.MapPost("/async/workspaces", async (CreateRequest req, RabbitMqPublisher publisher) =>
 {
     await publisher.PublishCreateCommand(req.Name);
