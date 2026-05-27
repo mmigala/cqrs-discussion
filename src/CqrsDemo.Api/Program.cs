@@ -2,6 +2,7 @@ using CqrsDemo.Api.Async;
 using CqrsDemo.Api.Cqrs;
 using CqrsDemo.Api.Cqrs.Behaviors;
 using CqrsDemo.Api.CqrsPlain;
+using CqrsDemo.Api.Endpoints;
 using CqrsDemo.Api.Repository;
 using CqrsDemo.Api.Services;
 using FluentValidation;
@@ -71,50 +72,10 @@ app.Use(async (context, next) =>
     }
 });
 
-// --- Approach 1: Application Services (no CQRS) ---
-app.MapPost("/services/workspaces", (CreateRequest req, IWorkspaceService svc) =>
-{
-    var ws = svc.Create(req.Name);
-    return Results.Created($"/services/workspaces/{ws.Id}", ws);
-}).WithTags("Application Services");
-
-app.MapGet("/services/workspaces/{id:guid}", (Guid id, IWorkspaceService svc) =>
-    svc.GetById(id) is { } ws ? Results.Ok(ws) : Results.NotFound())
-    .WithTags("Application Services");
-
-// --- Approach 2: CQRS via MediatR (in-process, no queue) ---
-// Pipeline: ValidationBehavior → LoggingBehavior → Handler
-app.MapPost("/cqrs/workspaces", async (CreateRequest req, IMediator mediator) =>
-{
-    var ws = await mediator.Send(new CreateWorkspaceCommand(req.Name));
-    return Results.Created($"/cqrs/workspaces/{ws.Id}", ws);
-}).WithTags("CQRS (MediatR + Pipeline)");
-
-app.MapGet("/cqrs/workspaces/{id:guid}", async (Guid id, IMediator mediator) =>
-    await mediator.Send(new GetWorkspaceQuery(id)) is { } ws ? Results.Ok(ws) : Results.NotFound())
-    .WithTags("CQRS (MediatR + Pipeline)");
-
-// --- Approach 3: CQRS without MediatR (plain services, same pattern) ---
-app.MapPost("/cqrs-plain/workspaces", (CreateRequest req, IWorkspaceCommandService cmdSvc) =>
-{
-    var ws = cmdSvc.Create(req.Name);
-    return Results.Created($"/cqrs-plain/workspaces/{ws.Id}", ws);
-}).WithTags("CQRS (Plain Services)");
-
-app.MapGet("/cqrs-plain/workspaces/{id:guid}", (Guid id, IWorkspaceQueryService querySvc) =>
-    querySvc.GetById(id) is { } ws ? Results.Ok(ws) : Results.NotFound())
-    .WithTags("CQRS (Plain Services)");
-
-// --- Approach 4: Async Command Dispatch (RabbitMQ for resilience) ---
-app.MapPost("/async/workspaces", async (CreateRequest req, RabbitMqPublisher publisher) =>
-{
-    await publisher.PublishCreateCommand(req.Name);
-    return Results.Accepted(value: new { message = "Command queued for processing", name = req.Name });
-}).WithTags("Async Dispatch (RabbitMQ)");
-
-app.MapGet("/async/workspaces", (IWorkspaceRepository repo) =>
-    Results.Ok(repo.GetAll()))
-    .WithTags("Async Dispatch (RabbitMQ)");
+app.MapServiceEndpoints();
+app.MapCqrsEndpoints();
+app.MapCqrsPlainEndpoints();
+app.MapAsyncEndpoints();
 
 app.Run();
 
